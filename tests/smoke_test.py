@@ -4,6 +4,12 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Windows CI runner'da stdout cp1252'dir; Türkçe karakterli print() çağrıları
+# UnicodeEncodeError atıyor ve betik ilk satırda ölüyordu. Çıktıyı UTF-8'e sabitle.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):  # stdout değiştirilemezse sessizce devam
+    pass
 
 # CI runner'larda (özel. Windows) stdout cp1252 olabilir ve bu betik sadelikle
 # Türkçe karakter basar. Python < 3.15 "locale" kodlayıcıyı kullanır, bu yüzden

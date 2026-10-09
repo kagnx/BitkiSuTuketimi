@@ -7,6 +7,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # gerçek platform kullan (Windows); yoksa offscreen'e düş
 os.environ.pop("QT_QPA_PLATFORM", None)
+# Windows CI runner'da stdout cp1252'dir; Türkçe karakterli print() çağrıları
+# UnicodeEncodeError atıyordu. Çıktıyı UTF-8'e sabitle.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    pass
 
 # CI runner'larda stdout cp1252 olabilir; Türkçe print'ler çökmesin.
 for _s in (sys.stdout, sys.stderr):
