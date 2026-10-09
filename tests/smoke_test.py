@@ -5,6 +5,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# CI runner'larda (özel. Windows) stdout cp1252 olabilir ve bu betik sadelikle
+# Türkçe karakter basar. Python < 3.15 "locale" kodlayıcıyı kullanır, bu yüzden
+# print('...ış...') natamamlıkla UnicodeEncodeError ile çöker; test hiçbir
+# iş kalmadan 1 saniyede düşer.  UTF-8'e zorlamak yeterlidir.
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from datetime import date
 
 # 1) koordinat testleri

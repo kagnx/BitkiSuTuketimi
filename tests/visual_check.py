@@ -8,6 +8,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # gerçek platform kullan (Windows); yoksa offscreen'e düş
 os.environ.pop("QT_QPA_PLATFORM", None)
 
+# CI runner'larda stdout cp1252 olabilir; Türkçe print'ler çökmesin.
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QImage, QColor
 
