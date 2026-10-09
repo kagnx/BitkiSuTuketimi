@@ -13,3 +13,10 @@ raporlar/
 .freebuff/
 .pytest_cache/
 
+# gecici teşhis/derleme çıktıları (commit'e girmemeli)
+_*.txt
+_*.py
+build_log*.txt
+build_err*.txt
+*.spec.bak
+
