@@ -1,1 +1,19 @@
+# Geliştirici bağımlılıkları (çalışma zamanı için gerekli DEĞİL)
+# Kurulum:  pip install -r requirements-dev.txt
+
+# Test altyapısı
 pytest>=8.0
+
+# İsteğe bağlı ek rapor formatları
+# Bu iki paket kurulu değilse uygulama normal çalışır;
+# yalnızca DOCX / XLSX dışa aktarma butonları uyarı gösterir.
+reportlab>=4.0      # DOCX raporu (app/report.py: build_report_docx)
+openpyxl>=3.1       # XLSX raporu (app/report.py: build_report_xlsx)
+
+# İsteğe bağlı: yüksek doğruluklu koordinat dönüşümü (pyproj bulunmazsa
+# uygulama kendi TM3/UTM matematiğini kullanır)
+# pyproj>=3.6
+
+# Tek exe derleme (build_exe.bat / ProSU.spec)
+# pyinstaller>=6.6
+
