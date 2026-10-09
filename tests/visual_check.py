@@ -5,11 +5,18 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# gerçek platform kullan (Windows); yoksa offscreen'e düş
-os.environ.pop("QT_QPA_PLATFORM", None)
 
-# Windows runner'da konsol kod sayfası cp1252'dir; Türkçe karakterli print'ler
-# UnicodeEncodeError ile çöküyordu. Ayrıntı: tests/_console.py
+# Görsel kontrol gerçek masaüstü tema renklerini örnekler; CI sunucularında ekran /
+# font yoktur ve Qt "fusion" tarzı sade bir tema döndürür — renk örneklemesi
+# anlamsız başarısızlık üretir. CI_TESTS=1 iken yalnızca arayüzün açılıp sayfa
+# dolaşımının tamamlandığı doğrulanır, renk örneklemesi atlanır.
+CI = os.environ.get("CI_TESTS", "").lower() in ("1", "true")
+
+if not CI:
+    # gerçek masaüstünde (Windows) platform eklentisini kullan; ekran yoksa
+    # Qt'nin offscreen'e düşmesine izin ver (silmek ekranı olmayan yerde çökertir)
+    os.environ.pop("QT_QPA_PLATFORM", None)
+
 from tests._console import force_utf8_console  # noqa: E402
 force_utf8_console()
 
@@ -70,7 +77,13 @@ for i in range(6):
 win.show()
 app.processEvents()
 print("Önizleme kaydedildi:", out)
-if not (sidebar_ok and nav_ok):
-    print("UYARI: tema renk kontrolü başarısız")
-    sys.exit(1)
-print("=== GÖRSEL KONTROL BAŞARILI ===")
+
+if CI:
+    # CI: yalnızca arayüzün açılıp hesap/çizim adımlarını tamamladığını doğrula.
+    print("CI modu: tema renk örneklemesi atlandı (gerçek masaüstü gerekir)")
+    print("=== GÖRSEL KONTROL BAŞARILI (CI) ===")
+else:
+    if not (sidebar_ok and nav_ok):
+        print("UYARI: tema renk kontrolü başarısız")
+        sys.exit(1)
+    print("=== GÖRSEL KONTROL BAŞARILI ===")

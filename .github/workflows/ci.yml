@@ -23,6 +23,9 @@ jobs:
     env:
       # PyQt6 başsız (headless) çalışsın: Xvcb / sanal ekran gerekmez
       QT_QPA_PLATFORM: offscreen
+      # görsel kontrol: tema rengi örneklemesi için gerçek masaüstü gerekir,
+      # CI sunucularında renk kontrolü atlanır (ayrıntı: tests/visual_check.py)
+      CI_TESTS: '1'
 
     steps:
       - name: Depoyu indir
