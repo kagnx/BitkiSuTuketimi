@@ -11,4 +11,5 @@ build/
 tile_cache/
 raporlar/
 .freebuff/
+.pytest_cache/
 

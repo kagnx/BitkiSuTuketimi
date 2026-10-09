@@ -213,6 +213,48 @@ def build_report_html(res, ekstra=None, config=None):
           <ul style="margin:2px 0 0 18px;">{oneri_list}</ul>
         </div>"""
 
+    stress_html = ""
+    st = res.get("stress_score")
+    if st is not None:
+        if st >= 70:
+            st_col, st_bg, st_sev = "#C62828", "#FDE7E7", "YÜKSEK"
+        elif st >= 40:
+            st_col, st_bg, st_sev = "#F9A825", "#FFF8E1", "ORTA"
+        else:
+            st_col, st_bg, st_sev = "#2E7D32", "#E7F4E7", "DÜŞÜK"
+        stress_html = f"""
+        <h3>📊 Kritik Dönem Su Stresi Skoru</h3>
+        <div class="box" style="border-left:5px solid {st_col}; background:{st_bg};">
+          <p style="color:{st_col}; font-weight:700; margin:0 0 6px 0;">
+            Stres skoru: <b>{st_sev} - {st:.0f}/100</b></p>
+          <p style="margin:4px 0;">Su stresi skoru; yağış karşılama, sezon sonu kök bölgesi
+          bakiyesi, kritik dönemdeki tepe net yoğunluğu ve risk seviyesine göre hesaplandı.
+          Yüksek skor, kritik dönemde sulama programının sıkılaştırılması gerektiğini gösterir.</p>
+        </div>"""
+
+    irrigation_html = ""
+    irr = res.get("irrigation_suggestion")
+    if irr:
+        irr_risk = {"yuksek": "YÜKSEK", "orta": "ORTA", "dusuk": "DÜŞÜK"}.get(irr.get("risk", "dusuk"), "")
+        irr_list = "".join(f"<li>{html.escape(k)}</li>" for k in irr.get("kesin", []))
+        irrigation_html = f"""
+        <h3>🚿 Kriter Tabanlı Sulama Önerisi</h3>
+        <div class="box" style="border-left:5px solid #0277BD; background:#E1F5FE;">
+          <p style="margin:0 0 6px 0;"><b>Öneri seviyesi:</b> {irr_risk}</p>
+          <ul style="margin:2px 0 0 18px;">{irr_list}</ul>
+        </div>"""
+
+    root_html = ""
+    rt = res.get("root_zone_treatment")
+    if rt:
+        root_html = f"""
+        <h3>🌱 Kök Bölgesi ve Toprak Stratejisi</h3>
+        <div class="box" style="border-left:5px solid #2E7D32; background:#E8F5E9;">
+          <p style="margin:0 0 6px 0;"><b>Önerilen strateji:</b> {html.escape(rt['durum'])}</p>
+          <p style="margin:4px 0;">Uygulama: {html.escape(rt['kombinasyon'])} - {html.escape(rt['akis'])}</p>
+          <p style="margin:4px 0; color:#6B7A5E;">{html.escape(rt['not'])}</p>
+        </div>"""
+
     tuz_param_row = ""
     if tuz:
         tz_sev2 = {"yuksek": "YÜKSEK", "orta": "ORTA", "dusuk": "DÜŞÜK"}.get(tuz["seviye"], tuz["seviye"])
@@ -327,9 +369,12 @@ def build_report_html(res, ekstra=None, config=None):
 {stage_rows}
 </table>
 {kritik_html}
+{stress_html}
 {tuz_html}
 {plan_html}
+{irrigation_html}
 {tree_html}
+{root_html}
 {imza_html}
 <footer>Rapor ProSU Tarımsal Su Yönetim Sistemi tarafından üretilmiştir. Kc değerleri FAO-56
 esas alınarak belirlenmiştir; yerel koşullar için ziraat mühendisliği onayı önerilir.<br/>
@@ -611,3 +656,447 @@ def save_compare_csv(results, konum=None, config=None, path=None):
         w.writerow([])
         w.writerow([TELIF])
     return path
+
+
+# ===================== YENİ: DOCX ve XLSX rapor export =====================
+# reportlab ve openpyxl isteğe bağlıdır; yoksa fonksiyonlar anlaşılır hata verir.
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                    Table, TableStyle, HRFlowable)
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    _HAVE_REPORTLAB = True
+except Exception:
+    _HAVE_REPORTLAB = False
+
+try:
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+    _HAVE_OPENPYXL = True
+except Exception:
+    _HAVE_OPENPYXL = False
+
+
+def _sev_hex(seviye):
+    return {"yuksek": "C62828", "orta": "F9A825", "dusuk": "2E7D32"}.get(seviye, "2E7D32")
+
+
+def build_report_docx(res, ekstra=None, config=None):
+    """Rapor sonucunu DOCX (reportlab) olarak üretir; dosya yolunu döndürür."""
+    if not _HAVE_REPORTLAB:
+        raise RuntimeError("DOCX icin reportlab gerekli: pip install reportlab")
+    cfg = config or {}
+    path = os.path.join(REPORT_DIR,
+                        f"su_raporu_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx")
+    doc = SimpleDocTemplate(path, pagesize=A4,
+                            leftMargin=15 * mm, rightMargin=15 * mm,
+                            topMargin=15 * mm, bottomMargin=15 * mm)
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1x", parent=styles["Heading1"], fontSize=17,
+                        textColor=colors.HexColor("#33691E"))
+    h2 = ParagraphStyle("h2x", parent=styles["Heading2"], fontSize=13,
+                        textColor=colors.HexColor("#558B2F"))
+    body = ParagraphStyle("bodyx", parent=styles["Normal"], fontSize=10, leading=14)
+    small = ParagraphStyle("smallx", parent=styles["Normal"], fontSize=8,
+                           textColor=colors.HexColor("#6B7A5E"))
+    p = []
+
+    p.append(Paragraph("ProSU - Bitki Su Ihtiyaci Raporu", h1))
+    p.append(Paragraph(f"Uretim tarihi: {datetime.now().strftime('%d.%m.%Y %H:%M')}", small))
+    if ekstra and ekstra.get("ada_parsel"):
+        p.append(Paragraph(f"Ada/Parsel: {html.escape(ekstra['ada_parsel'])}", body))
+    p.append(Spacer(1, 4 * mm))
+
+    plant = res["plant"]
+    info = [
+        [Paragraph("<b>Bitki</b>", body), Paragraph(html.escape(plant["ad"]), body),
+         Paragraph("<b>Kategori</b>", body), Paragraph(html.escape(plant.get("kategori", "")), body)],
+        [Paragraph("<b>Latin</b>", body), Paragraph(html.escape(plant.get("latin", "")), body),
+         Paragraph("<b>Sezon</b>", body), Paragraph(f"{res['season_days']} gun", body)],
+        [Paragraph("<b>ETo Yontemi</b>", body),
+         Paragraph(html.escape(res["opts"].get("eto_method", "")), body),
+         Paragraph("<b>Etkili Yagis</b>", body),
+         Paragraph(html.escape(res["opts"].get("rain_method", "")), body)],
+        [Paragraph("<b>Toprak</b>", body), Paragraph(html.escape(res["toprak"]), body),
+         Paragraph("<b>Sulama Sistemi</b>", body),
+         Paragraph(f"{html.escape(res['sistem'])} (%{res['sistem_eff']*100:.0f})", body)],
+    ]
+    t = Table(info, colWidths=[32 * mm, 55 * mm, 32 * mm, 55 * mm])
+    t.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8E3CC")),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#E8F1DC")),
+        ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#E8F1DC")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    p.append(t)
+    p.append(Spacer(1, 4 * mm))
+
+    p.append(Paragraph("Ozet Gostergeler", h2))
+    kpi = [
+        [Paragraph("<b>Sezonluk ETc</b>", body), Paragraph("<b>Etkili Yagis</b>", body),
+         Paragraph("<b>Net Ihtiyac</b>", body), Paragraph("<b>Brut Ihtiyac</b>", body)],
+        [Paragraph(f"{_f(res['tot_et'])} mm", body), Paragraph(f"{_f(res['tot_pe'])} mm", body),
+         Paragraph(f"{_f(res['tot_net'])} mm", body), Paragraph(f"{_f(res['tot_gross'])} mm", body)],
+        [Paragraph(f"<b>Net ({_f(res['alan_da'])} da)</b>", body), Paragraph("", body),
+         Paragraph(f"<b>Brut ({_f(res['alan_da'])} da)</b>", body), Paragraph("", body)],
+        [Paragraph(f"{_f(res['total_m3_net'])} m3", body), Paragraph("", body),
+         Paragraph(f"{_f(res['total_m3_gross'])} m3", body), Paragraph("", body)],
+    ]
+    t = Table(kpi, colWidths=[43 * mm] * 4)
+    t.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8E3CC")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#7CB342")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("SPAN", (0, 2), (1, 2)), ("SPAN", (2, 2), (3, 2)),
+        ("SPAN", (0, 3), (1, 3)), ("SPAN", (2, 3), (3, 3)),
+    ]))
+    p.append(t)
+    p.append(Spacer(1, 4 * mm))
+
+    # aylık döküm
+    p.append(Paragraph("Aylik Dokum (mm)", h2))
+    rows = [[Paragraph("<b>Ay</b>", body), Paragraph("<b>ETc</b>", body),
+             Paragraph("<b>Etkili Yagis</b>", body), Paragraph("<b>Net</b>", body),
+             Paragraph("<b>Brut</b>", body)]]
+    for m in res.get("monthly", []):
+        rows.append([Paragraph(m.get("ay", ""), body), Paragraph(_f(m["et"]), body),
+                     Paragraph(_f(m["pe"]), body), Paragraph(_f(m["net"]), body),
+                     Paragraph(_f(m["gross"]), body)])
+    rows.append([Paragraph("<b>TOPLAM</b>", body), Paragraph(_f(res["tot_et"]), body),
+                 Paragraph(_f(res["tot_pe"]), body), Paragraph(_f(res["tot_net"]), body),
+                 Paragraph(_f(res["tot_gross"]), body)])
+    t = Table(rows, colWidths=[34 * mm] * 5)
+    t.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8E3CC")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8F1DC")),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8F1DC")),
+    ]))
+    p.append(t)
+    p.append(Spacer(1, 4 * mm))
+
+    kr = res.get("kritik")
+    if kr:
+        p.append(Paragraph("Kritik Donem ve Su Stresi Riski", h2))
+        col = _sev_hex(kr["seviye"])
+        p.append(Paragraph(
+            f"<font color='#{col}'><b>Risk: {kr['seviye'].upper()}</b></font> - "
+            f"{html.escape(kr['mesaj'])}", body))
+        p.append(Paragraph(
+            f"{html.escape(kr['ad'])}: {kr['bas_tarih'].strftime('%d.%m.%Y')} - "
+            f"{kr['son_tarih'].strftime('%d.%m.%Y')} ({kr['gun']} gun) | "
+            f"ETc {_f(kr['et_mm'])} mm | Net {_f(kr['net_mm'])} mm | "
+            f"Yagis karsilama %{kr['pe_cover']:.0f}", body))
+        for neden in kr.get("nedenler", []):
+            p.append(Paragraph(f"- {html.escape(neden)}", body))
+        p.append(Spacer(1, 3 * mm))
+
+    st = res.get("stress_score")
+    if st is not None:
+        st_sev = "YUKSEK" if st >= 70 else ("ORTA" if st >= 40 else "DUSUK")
+        p.append(Paragraph("Kritik Donem Su Stresi Skoru", h2))
+        p.append(Paragraph(f"<b>{st_sev} - {st:.0f}/100</b>", body))
+        p.append(Spacer(1, 3 * mm))
+
+    tuz = res.get("tuzluluk")
+    if tuz:
+        p.append(Paragraph("Su Kalitesi ve Tuzluluk Uyarisi", h2))
+        col = _sev_hex(tuz["seviye"])
+        p.append(Paragraph(
+            f"<font color='#{col}'><b>Risk: {tuz['seviye'].upper()}</b></font> - "
+            f"{html.escape(tuz['mesaj'])}", body))
+        p.append(Paragraph(
+            f"Tuz toleransi: {html.escape(tuz['sinif'])} (ECe {tuz['ece']:.1f} dS/m) | "
+            f"ECw {tuz['ecw']:.1f} dS/m | Yikama gereksinimi: {tuz.get('lr_acik') or '-'}", body))
+        for oneri in tuz.get("oneriler", []):
+            p.append(Paragraph(f"- {html.escape(oneri)}", body))
+        p.append(Spacer(1, 3 * mm))
+
+    pl = res.get("plan")
+    if pl:
+        p.append(Paragraph("Otomatik Sulama Plani Onersi", h2))
+        prow = [[Paragraph("<b>Ay</b>", body), Paragraph("<b>Sulama</b>", body),
+                 Paragraph("<b>Aralik</b>", body), Paragraph("<b>Brut (mm)</b>", body),
+                 Paragraph("<b>Hacim (m3)</b>", body), Paragraph("<b>Sure (sa)</b>", body)]]
+        for ay in pl.get("ay", []):
+            prow.append([Paragraph(ay["ay"], body), Paragraph(str(ay["sulama"]), body),
+                         Paragraph(f"{ay['aralik']} gun", body), Paragraph(_f(ay["brut_mm"]), body),
+                         Paragraph(_f(ay["hacim_m3"]), body), Paragraph(_f(ay["sure_sa"]), body)])
+        t = Table(prow, colWidths=[28 * mm] * 6)
+        t.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8E3CC")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8F1DC")),
+        ]))
+        p.append(t)
+        p.append(Paragraph(html.escape(pl.get("tavsiye", "")), body))
+        p.append(Spacer(1, 3 * mm))
+
+    irr = res.get("irrigation_suggestion")
+    if irr:
+        p.append(Paragraph("Kriter Tabanli Sulama Onersi", h2))
+        for k in irr.get("kesin", []):
+            p.append(Paragraph(f"- {html.escape(k)}", body))
+        p.append(Spacer(1, 3 * mm))
+
+    rt = res.get("root_zone_treatment")
+    if rt:
+        p.append(Paragraph("Kok Bolgesi ve Toprak Stratejisi", h2))
+        p.append(Paragraph(html.escape(rt["durum"]), body))
+        p.append(Paragraph(html.escape(rt["not"]), small))
+        p.append(Spacer(1, 3 * mm))
+
+    pt = res.get("per_tree")
+    if pt:
+        p.append(Paragraph("Agac Basina Su Ihtiyaci", h2))
+        p.append(Paragraph(
+            f"Dikim alani {pt['alan_m2']:.2f} m2 | Sezon net {_f(pt['sezon_net_litre'])} L | "
+            f"Sezon brut {_f(pt['sezon_brut_litre'])} L | Sulama basina brut "
+            f"{_f(pt['sulama_brut_litre'])} L", body))
+        p.append(Spacer(1, 3 * mm))
+
+    p.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#D8E3CC")))
+    if cfg.get("rapor_kurumsal") and cfg.get("kurum_ad"):
+        p.append(Paragraph(f"<b>{html.escape(cfg.get('kurum_ad'))}</b> "
+                           f"{html.escape(cfg.get('kurum_alt') or '')}", small))
+        if cfg.get("imza_ad"):
+            p.append(Paragraph(f"Imza: {html.escape(cfg.get('imza_ad'))} "
+                               f"{html.escape(cfg.get('imza_unvan') or '')}", small))
+    p.append(Paragraph(html.escape(TELIF), small))
+    doc.build(p)
+    return path
+
+
+def save_report_docx(res, ekstra=None, config=None):
+    return build_report_docx(res, ekstra, config)
+
+
+def build_report_xlsx(res, ekstra=None, config=None):
+    """Rapor sonucunu XLSX (openpyxl) olarak üretir; dosya yolunu döndürür."""
+    if not _HAVE_OPENPYXL:
+        raise RuntimeError("XLSX icin openpyxl gerekli: pip install openpyxl")
+    cfg = config or {}
+    path = os.path.join(REPORT_DIR,
+                        f"su_raporu_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Su Ihtiyaci Raporu"
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 26
+    ws.column_dimensions["C"].width = 22
+    ws.column_dimensions["D"].width = 22
+    ws.column_dimensions["E"].width = 22
+
+    bold = Font(bold=True)
+    head_fill = PatternFill("solid", fgColor="E8F1DC")
+    title_font = Font(bold=True, size=14, color="33691E")
+
+    r = 1
+    ws.cell(r, 1, "ProSU - Bitki Su Ihtiyaci Raporu").font = title_font
+    r += 1
+    ws.cell(r, 1, "Uretim tarihi").font = bold
+    ws.cell(r, 2, datetime.now().strftime("%d.%m.%Y %H:%M"))
+    r += 2
+
+    if ekstra and ekstra.get("ada_parsel"):
+        ws.cell(r, 1, "Ada/Parsel").font = bold
+        ws.cell(r, 2, str(ekstra["ada_parsel"]))
+        r += 1
+    if ekstra and ekstra.get("koordinat"):
+        ws.cell(r, 1, "Koordinat").font = bold
+        ws.cell(r, 2, str(ekstra["koordinat"]))
+        r += 1
+    r += 1
+
+    plant = res["plant"]
+    ws.cell(r, 1, "Bitki Bilgileri").font = bold
+    r += 1
+    for label, val in [
+        ("Bitki", plant["ad"]),
+        ("Kategori", plant.get("kategori", "")),
+        ("Latin", plant.get("latin", "")),
+        ("Sezon (gun)", res["season_days"]),
+        ("ETo Yontemi", res["opts"].get("eto_method", "")),
+        ("Etkili Yagis", res["opts"].get("rain_method", "")),
+        ("Toprak", res["toprak"]),
+        ("Sulama Sistemi", f"{res['sistem']} (%{res['sistem_eff']*100:.0f})"),
+        ("MAD", f"%{res['mad']*100:.0f}"),
+        ("Onerilen aralik (gun)", res["interval"]),
+    ]:
+        ws.cell(r, 1, label).font = bold
+        ws.cell(r, 2, val)
+        r += 1
+    r += 1
+
+    ws.cell(r, 1, "Ozet Gostergeler").font = bold
+    r += 1
+    for label, val in [
+        ("Sezonluk ETc (mm)", round(res["tot_et"], 1)),
+        ("Etkili Yagis (mm)", round(res["tot_pe"], 1)),
+        ("Net Ihtiyac (mm)", round(res["tot_net"], 1)),
+        ("Brut Ihtiyac (mm)", round(res["tot_gross"], 1)),
+        (f"Net ({res['alan_da']:g} da, m3)", round(res["total_m3_net"], 1)),
+        (f"Brut ({res['alan_da']:g} da, m3)", round(res["total_m3_gross"], 1)),
+        ("Tepe gunluk net (mm)", round(res["peak_daily_net"], 2)),
+    ]:
+        ws.cell(r, 1, label).font = bold
+        ws.cell(r, 2, val)
+        r += 1
+    r += 1
+
+    ws.cell(r, 1, "Aylik Dokum (mm)").font = bold
+    r += 1
+    for c, h in enumerate(["Ay", "ETc", "Etkili Yagis", "Net", "Brut"], start=1):
+        cell = ws.cell(r, c, h)
+        cell.font = bold
+        cell.fill = head_fill
+    r += 1
+    for m in res.get("monthly", []):
+        ws.cell(r, 1, m.get("ay", ""))
+        ws.cell(r, 2, round(m["et"], 1))
+        ws.cell(r, 3, round(m["pe"], 1))
+        ws.cell(r, 4, round(m["net"], 1))
+        ws.cell(r, 5, round(m["gross"], 1))
+        r += 1
+    ws.cell(r, 1, "TOPLAM").font = bold
+    ws.cell(r, 2, round(res["tot_et"], 1)).font = bold
+    ws.cell(r, 3, round(res["tot_pe"], 1)).font = bold
+    ws.cell(r, 4, round(res["tot_net"], 1)).font = bold
+    ws.cell(r, 5, round(res["tot_gross"], 1)).font = bold
+    r += 2
+
+    kr = res.get("kritik")
+    if kr:
+        ws.cell(r, 1, "Kritik Donem ve Su Stresi Riski").font = bold
+        r += 1
+        for label, val in [
+            ("Risk seviyesi", kr["seviye"].upper()),
+            ("Donem", f"{html.escape(kr['ad'])}: {kr['bas_tarih'].strftime('%d.%m.%Y')} - "
+                      f"{kr['son_tarih'].strftime('%d.%m.%Y')} ({kr['gun']} gun)"),
+            ("ETc (mm)", round(kr["et_mm"], 1)),
+            ("Net ihtiyac (mm)", round(kr["net_mm"], 1)),
+            ("Yagis karsilama (%)", round(kr["pe_cover"], 0)),
+            ("Tepe gunluk net (mm)", round(kr["tepe_gunluk_net"], 2)),
+        ]:
+            ws.cell(r, 1, label).font = bold
+            ws.cell(r, 2, val)
+            r += 1
+        for neden in kr.get("nedenler", []):
+            ws.cell(r, 1, "-")
+            ws.cell(r, 2, html.escape(neden))
+            r += 1
+        r += 1
+
+    st = res.get("stress_score")
+    if st is not None:
+        ws.cell(r, 1, "Kritik Donem Su Stresi Skoru").font = bold
+        r += 1
+        st_sev = "YUKSEK" if st >= 70 else ("ORTA" if st >= 40 else "DUSUK")
+        ws.cell(r, 1, "Skor").font = bold
+        ws.cell(r, 2, f"{st_sev} - {st:.0f}/100")
+        r += 2
+
+    tuz = res.get("tuzluluk")
+    if tuz:
+        ws.cell(r, 1, "Su Kalitesi ve Tuzluluk Uyarisi").font = bold
+        r += 1
+        for label, val in [
+            ("Risk seviyesi", tuz["seviye"].upper()),
+            ("Mesaj", html.escape(tuz["mesaj"])),
+            ("Tuz toleransi", f"{tuz['sinif']} (ECe {tuz['ece']:.1f} dS/m)"),
+            ("Sulama suyu ECw", f"{tuz['ecw']:.1f} dS/m"),
+            ("Yikama gereksinimi", tuz.get("lr_acik") or "-"),
+        ]:
+            ws.cell(r, 1, label).font = bold
+            ws.cell(r, 2, val)
+            r += 1
+        for oneri in tuz.get("oneriler", []):
+            ws.cell(r, 1, "-")
+            ws.cell(r, 2, html.escape(oneri))
+            r += 1
+        r += 1
+
+    pl = res.get("plan")
+    if pl:
+        ws.cell(r, 1, "Otomatik Sulama Plani Onersi").font = bold
+        r += 1
+        for c, h in enumerate(["Ay", "Sulama", "Aralik (gun)", "Brut (mm)", "Hacim (m3)", "Sure (sa)"], start=1):
+            cell = ws.cell(r, c, h)
+            cell.font = bold
+            cell.fill = head_fill
+        r += 1
+        for ay in pl.get("ay", []):
+            ws.cell(r, 1, ay["ay"])
+            ws.cell(r, 2, ay["sulama"])
+            ws.cell(r, 3, ay["aralik"])
+            ws.cell(r, 4, round(ay["brut_mm"], 1))
+            ws.cell(r, 5, round(ay["hacim_m3"], 1))
+            ws.cell(r, 6, round(ay["sure_sa"], 1))
+            r += 1
+        ws.cell(r, 1, "Ozet").font = bold
+        ws.cell(r, 2, html.escape(pl.get("tavsiye", "")))
+        r += 2
+
+    irr = res.get("irrigation_suggestion")
+    if irr:
+        ws.cell(r, 1, "Kriter Tabanli Sulama Onersi").font = bold
+        r += 1
+        ws.cell(r, 1, "Oneri seviyesi").font = bold
+        ws.cell(r, 2, {"yuksek": "YUKSEK", "orta": "ORTA", "dusuk": "DUSUK"}.get(irr.get("risk"), ""))
+        r += 1
+        for k in irr.get("kesin", []):
+            ws.cell(r, 1, "-")
+            ws.cell(r, 2, html.escape(k))
+            r += 1
+        r += 1
+
+    rt = res.get("root_zone_treatment")
+    if rt:
+        ws.cell(r, 1, "Kok Bolgesi ve Toprak Stratejisi").font = bold
+        r += 1
+        ws.cell(r, 1, "Strateji").font = bold
+        ws.cell(r, 2, html.escape(rt["durum"]))
+        r += 1
+        ws.cell(r, 1, "Uygulama").font = bold
+        ws.cell(r, 2, f"{html.escape(rt['kombinasyon'])} - {html.escape(rt['akis'])}")
+        r += 1
+        ws.cell(r, 1, "Not").font = bold
+        ws.cell(r, 2, html.escape(rt["not"]))
+        r += 2
+
+    pt = res.get("per_tree")
+    if pt:
+        ws.cell(r, 1, "Agac Basina Su Ihtiyaci").font = bold
+        r += 1
+        for label, val in [
+            ("Dikim alani (m2)", round(pt["alan_m2"], 2)),
+            ("Sezon net (L)", round(pt["sezon_net_litre"], 1)),
+            ("Sezon brut (L)", round(pt["sezon_brut_litre"], 1)),
+            ("Sulama basina brut (L)", round(pt["sulama_brut_litre"], 1)),
+        ]:
+            ws.cell(r, 1, label).font = bold
+            ws.cell(r, 2, val)
+            r += 1
+        r += 1
+
+    if cfg.get("rapor_kurumsal") and cfg.get("kurum_ad"):
+        ws.cell(r, 1, "Kurum").font = bold
+        ws.cell(r, 2, html.escape(cfg.get("kurum_ad") or ""))
+        r += 1
+        ws.cell(r, 1, "Birim").font = bold
+        ws.cell(r, 2, html.escape(cfg.get("kurum_alt") or ""))
+        r += 1
+        if cfg.get("imza_ad"):
+            ws.cell(r, 1, "Imza").font = bold
+            ws.cell(r, 2, f"{html.escape(cfg.get('imza_ad'))} "
+                          f"{html.escape(cfg.get('imza_unvan') or '')}")
+            r += 1
+        r += 1
+
+    ws.cell(r, 1, TELIF).font = Font(size=8, color="6B7A5E")
+    wb.save(path)
+    return path
+
+
+def save_report_xlsx(res, ekstra=None, config=None):
+    return build_report_xlsx(res, ekstra, config)

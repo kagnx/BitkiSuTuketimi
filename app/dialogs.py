@@ -120,22 +120,36 @@ class PlantEditDialog(QDialog):
 class ClimateEditDialog(QDialog):
     """12 aylık iklim verisi düzenleme tablosu."""
 
+    KEYS = ("tmax", "tmin", "rh", "u2", "n", "p")
+    KOLON_AD = ("Tmax", "Tmin", "Nem", "Rüzgâr", "Güneşlenme", "Yağış")
+
     def __init__(self, parent=None, climate=None):
         super().__init__(parent)
         self.setWindowTitle("İklim Verilerini Düzenle")
         self.resize(760, 420)
         self.climate = climate
-        self.table = QTableWidget(12, 6)
+        # ÖNEMLİ: Ay + 6 veri kolonu (tmax, tmin, rh, u2, n, p) = 7 kolon.
+        # Eski hata: QTableWidget(12, 6) ile 6 kolon açılıyor, "Yağış (p)"
+        # kolonu (sütun 6) hiç oluşmadığından OK'te item(r, 6) → None →
+        # 'NoneType' object has no attribute 'text' hatası veriyordu.
+        self.table = QTableWidget(12, 7)
         self.table.setHorizontalHeaderLabels(
             ["Ay", "Tmax (°C)", "Tmin (°C)", "Nem (%)", "Rüzgâr (m/s)", "Güneşlenme (saat)", "Yağış (mm)"])
         headers = self.table.horizontalHeader()
         headers.setStretchLastSection(True)
-        keys = ("tmax", "tmin", "rh", "u2", "n", "p")
+        keys = self.KEYS
         for r in range(12):
             self.table.setItem(r, 0, QTableWidgetItem(AY_AD[r]))
             self.table.item(r, 0).setFlags(Qt.ItemFlag.ItemIsEnabled)
             for c, k in enumerate(keys, start=1):
-                it = QTableWidgetItem(f"{getattr(climate, k)[r]:.2f}")
+                # None değerleri güvenli biçimde göster (boş hücre → uyarı)
+                val = None
+                if climate is not None:
+                    arr = getattr(climate, k, None)
+                    if isinstance(arr, (list, tuple)) and r < len(arr):
+                        val = arr[r]
+                txt = "" if val is None else f"{float(val):.2f}"
+                it = QTableWidgetItem(txt)
                 self.table.setItem(r, c, it)
         btn = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btn.accepted.connect(self._ok)
@@ -145,17 +159,53 @@ class ClimateEditDialog(QDialog):
         lay.addWidget(btn)
 
     def _ok(self):
-        keys = ("tmax", "tmin", "rh", "u2", "n", "p")
+        """Hücreleri güvenli okur ve doğrular.
+
+        - item() None olabilir (boş/silinmiş hücre) → NoneType çökmesi yerine
+          anlaşılır Türkçe uyarı verir.
+        - Tüm satırlar geçmeden climate nesnesine ATAMA YAPILMAZ
+          (kısmi güncelleme olmaz).
+        """
+        keys = self.KEYS
+        yeni = {}
         try:
             for r in range(12):
+                satir = {}
                 for c, k in enumerate(keys, start=1):
-                    v = float(self.table.item(r, c).text().replace(",", "."))
-                    if k in ("rh",) and not (0 <= v <= 100):
-                        raise ValueError("Nem 0-100 arasında olmalı")
-                    getattr(self.climate, k)[r] = v
-        except (ValueError, AttributeError) as e:
+                    it = self.table.item(r, c)
+                    if it is None:
+                        raise ValueError(
+                            f"{AY_AD[r]} — {self.KOLON_AD[c - 1]}: hücre boş, "
+                            f"sayısal bir değer girin.")
+                    txt = it.text().strip().replace(",", ".")
+                    if not txt:
+                        raise ValueError(
+                            f"{AY_AD[r]} — {self.KOLON_AD[c - 1]}: değer boş, "
+                            f"sayısal bir değer girin.")
+                    try:
+                        v = float(txt)
+                    except ValueError:
+                        raise ValueError(
+                            f"{AY_AD[r]} — {self.KOLON_AD[c - 1]}: "
+                            f"geçersiz sayı ({it.text().strip()!r}).")
+                    if k == "rh" and not (0 <= v <= 100):
+                        raise ValueError(f"{AY_AD[r]}: Nem 0-100 arasında olmalı.")
+                    if k in ("u2", "n", "p") and v < 0:
+                        raise ValueError(
+                            f"{AY_AD[r]} — {self.KOLON_AD[c - 1]} negatif olamaz.")
+                    satir[k] = v
+                if satir["tmax"] < satir["tmin"]:
+                    raise ValueError(
+                        f"{AY_AD[r]}: Tmax ({satir['tmax']:.1f}), "
+                        f"Tmin'den ({satir['tmin']:.1f}) küçük olamaz.")
+                yeni[r] = satir
+        except (ValueError, AttributeError, TypeError) as e:
             QMessageBox.warning(self, "Geçersiz Değer", str(e))
             return
+        # tüm satırlar geçerli → toplu atama
+        for r, satir in yeni.items():
+            for k, v in satir.items():
+                getattr(self.climate, k)[r] = v
         self.accept()
 
 

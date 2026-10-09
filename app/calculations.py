@@ -541,6 +541,12 @@ def compute_water_need(plant, clim, opts):
         "agac_basina_litre": agac_litre,
     }
 
+    # --- yeni: stres skoru, kriter tabanlı sulama önerisi, kök stratejisi ---
+    st = stress_score(kritik, root, mad, swc_end, k_pe_cover, total,
+                      peak_day_meta[1] if peak_day_meta else 0.0)
+    irr_sug = irrigation_suggestion(kritik, opts, plan)
+    root_trt = root_zone_treatment(plant, opts)
+
     return {
         "plant": plant,
         "opts": opts,
@@ -582,4 +588,83 @@ def compute_water_need(plant, clim, opts):
         "irrigation_count": irrigation_count,
         "per_tree": per_tree,
         "et_fazla_yağmur": tot_pe,
+        "stress_score": st,
+        "irrigation_suggestion": irr_sug,
+        "root_zone_treatment": root_trt,
     }
+
+def stress_score(critik, root, mad, swc_end, pe_cover, total_days, eto_peak):
+    """Kritik dönemsel su stresi skoru (0-100; yüksek = daha fazla stres).
+
+    bileşenler: yağış karşılama yetersizliği, sezon sonu kök bölgesi bakiyesi,
+    kritik dönemdeki tepe net ihtiyacın ETo tepe oranına göre yoğunluğu,
+    kritik risk seviyesi ve uzun sezon birikimi.
+    """
+    p = 0.0
+    # 1) yağış karşılama yetersizliği
+    p += min(40.0, max(0.0, (40.0 - pe_cover) * 1.2))
+    # 2) sezon sonu kök bölgesi bakiyesi (doluluk düşükse stres artar)
+    cap = max(1.0, root * 150.0)
+    p += min(25.0, max(0.0, (1.0 - swc_end / cap) * 25.0))
+    # 3) kritik tepe net / sezon tepe ETo yoğunluğu
+    peak_net = float((critik or {}).get("tepe_gunluk_net") or 0.0)
+    if eto_peak > 0:
+        oran = peak_net / eto_peak
+        p += min(20.0, max(0.0, (oran - 0.4) * 30.0))
+    # 4) kritik risk seviyesi
+    sev = (critik or {}).get("seviye")
+    if sev == "yuksek":
+        p += 15.0
+    elif sev == "orta":
+        p += 8.0
+    # 5) uzun sezon (stres birikimi)
+    p += min(5.0, max(0.0, (total_days / 90.0 - 1.0) * 5.0))
+    return round(min(100.0, max(0.0, p)), 1)
+
+
+def irrigation_suggestion(critik, opts, plan):
+    """Kriter tabanlı sulama önerisi üretir (sıklık, miktarı, süresi)."""
+    cfg = {
+        "basinc": critik.get("seviye", "dusuk"),
+        "sulama_sayisi": plan.get("kritik_sulama", 0),
+        "aralik": plan.get("kritik_aralik", 0),
+        "toplam_gun": critik.get("gun", 0),
+        "net": critik.get("net_mm", 0.0),
+        "pe_cover": critik.get("pe_cover", 0.0),
+    }
+    kesin = []
+    if cfg["basinc"] == "yuksek":
+        kesin.append("Kritik döneme girişte 2 saat önce ve çıktığında sıcaklık <28°C ise sulama yapın.")
+        kesin.append("Sulama sıklığını normalize edin; 3 günden fazla boşta bırakmayın.")
+    elif cfg["basinc"] == "orta":
+        kesin.append("Eksik su kurisını takip edin; toprağın yüzeyi 5 cm yakının kuru olursa sulayın.")
+    else:
+        kesin.append("Sezon boyunca saptırmadan uzak durun; planlı sulamayı koruyun.")
+    if cfg["sulama_sayisi"] < 2:
+        if cfg["basinc"] == "yuksek":
+            kesin.append("Kritik dönemde en az 2 kez sulayın.")
+        else:
+            kesin.append("Sulama aralığını %30 azaltın.")
+    if cfg["pe_cover"] < 20:
+        kesin.append("Yağış, ihtiyacı yeterince karşılamıyor; damla/salma ile tamamlayın.")
+    if plan.get("debi", 0) == 0:
+        kesin.append("Sistem debisi belirsizse, suyu 2 aşamalı (drenaj + sulama) uygulayın.")
+    return {"kesin": kesin, "risk": cfg["basinc"], "seviye": cfg["sulama_sayisi"]}
+
+
+def root_zone_treatment(plant, opts):
+    """Kök derinliğe göre toprak işleme / sulama stratejisi önerisi."""
+    root = float(plant.get("kok", 0.7))
+    toprak = opts.get("toprak", "Tınlı")
+    sistem = opts.get("sistem", "Damla Sulama")
+    if root < 0.5:
+        durum = "Şerit sulama; küçük çap, yüksek sıklık"
+    elif root < 1.0:
+        durum = "Normal kök; standard drenaj + çoklu sulama"
+    else:
+        durum = "Derin kök; seyrek ancak yüksek debil eklemeli sulama"
+    if toprak in ("Tınlı-Killi", "Killi"):
+        durum += "; drenajı iyileştirin, sulama aralığını %20 azaltın"
+    if sistem == "Salma (Yüzey)":
+        durum += "; seyrek ve derin sulama yerine parça-parça uygulayın"
+    return {"durum": durum, "kombinasyon": "sıra/tetik", "akis": "hafta içinde", "not": "Yüksek değerlerde toprak nemini 60-70% tutmak için sulama akışı azaltılmalıdır."}

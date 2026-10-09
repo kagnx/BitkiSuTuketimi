@@ -29,28 +29,37 @@ from .dialogs import ParcelSaveDialog
 from .theme import PRIMARY, PRIMARY_DARK, PRIMARY_LIGHT, BG_DARK, DANGER, TEXT_DARK
 
 MIN_Z = 3
-MAX_Z = 18
+# En fazla yakınlaşma: 22 (parsel/köşe düzeyinde detay). Kaynakların verdiği
+# yerel (native) çözünürlüğü aşan seviyelerde alt seviyedeki karo büyütülerek
+# çizilir (overzoom), bkz. TileLayer.paint.
+MAX_Z = 22
 TILE = 256
 UA = "ProSU-Tarimsu/1.0 (tarimsal su yonetimi masaustu uygulamasi)"
 CACHE_DIR = os.path.join(tempfile.gettempdir(), "prosu_tiles")
 
-# Harita katmanları (uydu + etiketli görünümler)
+# Harita katmanları (uydu + etiketli görünümler).
+# max_z: kaynağın verdiği en yüksek yerel çözünürlük; üzerindeki seviyelerde
+# bir alt seviyenin karosu büyütülerek çizilir (overzoom).
 TILE_SOURCES = {
     "Google Uydu + Etiket": {
         "key": "g_hyb",
         "url": "https://mt1.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}",
+        "max_z": 20,
     },
     "Google Uydu": {
         "key": "g_sat",
         "url": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        "max_z": 20,
     },
     "OpenStreetMap (Etiketli)": {
         "key": "osm",
         "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "max_z": 19,
     },
     "Esri Uydu": {
         "key": "esri",
         "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "max_z": 19,
     },
 }
 DEFAULT_TILE_SOURCE = "Google Uydu + Etiket"
@@ -82,10 +91,38 @@ def lonlat_to_pixel(lon, lat, z):
     return x, y
 
 
+# Mercator (Web Mercator) geçerli enlem sınırı: ±85.0511287798066°
+LAT_LIMIT = 85.0511287798066
+# math.sinh bu değerin üstünde OverflowError verir (Qt piksel koordinatı için
+# ~1.2e11 piksel; aşırı kaydırma/uzak sahne koordinatlarında görülür).
+_SINH_LIMIT = 700.0
+
+
 def pixel_to_lonlat(x, y, z):
+    """Web Mercator piksel -> WGS84 derece.
+
+    Harita dışına kaydırma sonrası (veya çok yüksek zoom'da) sahne
+    koordinatları beklenenden büyük olabilir; bu durumda:
+      • math.sinh OverflowError vermesin (arg sınırlanır),
+      • enlem Mercator sınırında tutulur (±85.05°),
+      • boylam [-180, 180] aralığına sarılır (dünya yatayda tekerrürlüdür).
+    Sayede ölçüm/çizim/otomatik kaydırma işlemleri çökmeden ve anlamsız
+    koordinatlarla değil, gerçek konumla çalışmaya devam eder.
+    """
     n = 2 ** z
     lon = x / TILE / n * 360.0 - 180.0
-    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / TILE / n))))
+    arg = math.pi * (1.0 - 2.0 * y / TILE / n)
+    if arg > _SINH_LIMIT:
+        arg = _SINH_LIMIT
+    elif arg < -_SINH_LIMIT:
+        arg = -_SINH_LIMIT
+    lat = math.degrees(math.atan(math.sinh(arg)))
+    if lat > LAT_LIMIT:
+        lat = LAT_LIMIT
+    elif lat < -LAT_LIMIT:
+        lat = -LAT_LIMIT
+    if lon > 180.0 or lon < -180.0:
+        lon = ((lon + 180.0) % 360.0) - 180.0
     return lon, lat
 
 
@@ -186,6 +223,13 @@ class MarkerItem(QGraphicsEllipseItem):
         painter.drawText(QPointF(10, fm.ascent() + 2), self.label)
 
 
+def _paint_placeholder(painter, tx, ty):
+    """Hâlâ inmemiş karo yerine açık yeşil çerçeveli geçici alan çizer."""
+    painter.fillRect(QRectF(tx * TILE, ty * TILE, TILE, TILE), QColor("#DCE7D2"))
+    painter.setPen(QPen(QColor("#A9BF94"), 1))
+    painter.drawRect(tx * TILE, ty * TILE, TILE, TILE)
+
+
 class TileLayer(QGraphicsItem):
     def __init__(self, view, z):
         super().__init__()
@@ -200,8 +244,11 @@ class TileLayer(QGraphicsItem):
 
     def paint(self, painter, option, widget=None):
         z = self.z
-        # görünür alan: viewport tabanlı (paint sırasında exposed dev olabilir)
         view = self.view
+        # overzoom: kaynak native sınırını aşan seviyelerde alt karo büyütülür
+        z_eff = min(z, layer_max_z(view.tile_key))
+        over = z - z_eff
+        is_over = over > 0
         exposed = option.exposedRect
         try:
             vp = view.mapToScene(view.viewport().rect()).boundingRect()
@@ -229,21 +276,38 @@ class TileLayer(QGraphicsItem):
             for tx in range(x0, x1 + 1):
                 for ty in range(y0, y1 + 1):
                     try:
-                        key = f"{tkey}_{z}_{tx}_{ty}"
-                        pm = QPixmapCache.find(key)  # PyQt6: (str) -> QPixmap
-                        if pm is not None and not pm.isNull():
-                            painter.drawPixmap(tx * TILE, ty * TILE, pm)
+                        if not is_over:
+                            # normal: bu seviyenin karosu
+                            key = f"{tkey}_{z}_{tx}_{ty}"
+                            pm = QPixmapCache.find(key)
+                            if pm is not None and not pm.isNull():
+                                painter.drawPixmap(tx * TILE, ty * TILE, pm)
+                            else:
+                                want.append((tx, ty))
+                                _paint_placeholder(painter, tx, ty)
                         else:
-                            want.append((tx, ty))
-                            # placeholder
-                            painter.fillRect(QRectF(tx * TILE, ty * TILE, TILE, TILE), QColor("#DCE7D2"))
-                            painter.setPen(QPen(QColor("#A9BF94"), 1))
-                            painter.drawRect(tx * TILE, ty * TILE, TILE, TILE)
+                            # overzoom: ata karonun ilgili bölgesini büyüt
+                            px, py, _f, sx, sy, s = parent_tile(z, tx, ty, z_eff)
+                            pkey = f"{tkey}_{z_eff}_{px}_{py}"
+                            pm = QPixmapCache.find(pkey)
+                            if pm is not None and not pm.isNull():
+                                painter.drawPixmap(
+                                    QRectF(tx * TILE, ty * TILE, TILE, TILE),
+                                    pm, QRectF(sx, sy, s, s))
+                            else:
+                                want.append((px, py))
+                                _paint_placeholder(painter, tx, ty)
+                                view.request_tiles(z_eff, [(px, py)])
                     except Exception:
-                        want.append((tx, ty))
-            if len(want) > 256:
-                want = want[:256]  # çerçeve başına istek sınırı
-            view.request_tiles(z, want)
+                        if not is_over:
+                            want.append((tx, ty))
+            if not is_over and want:
+                if len(want) > 256:
+                    want = list(dict.fromkeys(want))[:256]
+                view.request_tiles(z, want)
+            elif is_over and want:
+                want = list(dict.fromkeys(want))[:256]
+                view.request_tiles(z_eff, want)
 
     def _draw_grid(self, painter, exposed):
         """Enlem/boylam ızgarası (çevrimdışı ve tile üstü hafif)."""
@@ -258,12 +322,16 @@ class TileLayer(QGraphicsItem):
         lon0, lat1 = pixel_to_lonlat(exposed.left(), exposed.top(), self.z)
         lon1, lat0 = pixel_to_lonlat(exposed.right(), exposed.bottom(), self.z)
         step = self._grid_step(lon1 - lon0, lat1 - lat0)
+        # yüksek zoom'da daha hassas etiket (ondalık basamak adıma göre)
+        dec = 2
+        if step < 1.0:
+            dec = max(2, min(6, -int(math.floor(math.log10(step))) + 1))
         # dikey çizgiler
         lo = math.floor(lon0 / step) * step
         while lo <= lon1:
             x, _ = lonlat_to_pixel(lo, (lat0 + lat1) / 2, self.z)
             painter.drawLine(QPointF(x, exposed.top()), QPointF(x, exposed.bottom()))
-            txt = f"{lo:.2f}°"
+            txt = f"{lo:.{dec}f}°"
             painter.setPen(QColor("#33452B"))
             painter.drawText(QPointF(x + 3, exposed.top() + 12), txt)
             painter.setPen(pen)
@@ -272,7 +340,7 @@ class TileLayer(QGraphicsItem):
         while la <= lat1:
             _, y = lonlat_to_pixel((lon0 + lon1) / 2, la, self.z)
             painter.drawLine(QPointF(exposed.left(), y), QPointF(exposed.right(), y))
-            txt = f"{la:.2f}°"
+            txt = f"{la:.{dec}f}°"
             painter.setPen(QColor("#33452B"))
             painter.drawText(QPointF(exposed.left() + 3, y - 3), txt)
             painter.setPen(pen)
@@ -282,10 +350,33 @@ class TileLayer(QGraphicsItem):
     @staticmethod
     def _grid_step(dlon, dlat):
         span = max(dlon, dlat)
-        for s in (10.0, 5.0, 2.0, 1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01, 0.005):
+        for s in (10.0, 5.0, 2.0, 1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01,
+                  0.005, 0.002, 0.001, 0.0005, 0.0002, 0.0001):
             if span / s <= 4.0:
                 return s
-        return 0.005
+        return 0.0001
+
+
+def layer_max_z(tile_key):
+    """Katmanın yerel çözünürlük sınırını döndürür (overzoom eşiği)."""
+    for src in TILE_SOURCES.values():
+        if src.get("key") == tile_key:
+            return int(src.get("max_z", MAX_Z))
+    return MAX_Z
+
+
+def effective_tile_z(z, tile_key):
+    """Görünüm seviyesi z için gerçekten indirilecek karo seviyesi (capped)."""
+    return max(MIN_Z, min(z, layer_max_z(tile_key)))
+
+
+def parent_tile(z, tx, ty, z_want):
+    """z seviyesindeki karonun z_want (< z) seviyesindeki atasını döndürür:
+    (px, py, f, sx, sy, s) — ata karosu (px,py), ata içinde (sx,sy) başlangıçlı
+    s×s piksellik bölge büyütülerek bu karoya uyar."""
+    d = z - z_want
+    f = 2 ** d
+    return tx // f, ty // f, f, (tx % f) * (TILE // f), (ty % f) * (TILE // f), TILE // f
 
 
 class MapCanvas(QGraphicsView):
@@ -375,14 +466,26 @@ class MapCanvas(QGraphicsView):
         self.status_message.emit(f"Harita katmanı: {name}")
 
     def zoom_in(self):
-        if self.zoom < MAX_Z:
-            self.zoom += 1
-            self.apply_transform()
+        """En fazla MAX_Z seviyesine kadar yakınlaşır (+2/−2 hızlı adım destekler)."""
+        self.set_zoom(self.zoom + 1)
 
     def zoom_out(self):
-        if self.zoom > MIN_Z:
-            self.zoom -= 1
+        self.set_zoom(self.zoom - 1)
+
+    def zoom_to(self, z):
+        """Doğrudan seviye atar; aralık dışı değerler MIN_Z/MAX_Z'e tutturulur."""
+        self.set_zoom(z)
+
+    def set_zoom(self, z):
+        z = max(MIN_Z, min(MAX_Z, int(z)))
+        if z != self.zoom:
+            self.zoom = z
             self.apply_transform()
+        return self.zoom
+
+    def layer_native_max(self):
+        """Aktif katmanın yerel karo sınırını döndürür."""
+        return layer_max_z(self.tile_key)
 
     def fit_bounds(self, lon_min, lat_min, lon_max, lat_max, margin=0.06):
         """Verilen coğrafi sınırları görünüme sığdırır (otomatik zoom + merkez)."""
@@ -536,7 +639,7 @@ class MapCanvas(QGraphicsView):
                 path.lineTo(QPointF(x, y))
                 seg = QGraphicsPathItem(path)
                 seg.setPen(QPen(QColor("#1565C0"), 2))
-                seg.setBrush(Qt.BrushStyle.NoBrush)
+                seg.setBrush(QBrush(Qt.BrushStyle.NoBrush))
                 self.scene.addItem(seg)
                 self._item_refs.append(seg)
                 d = haversine(p0[0], p0[1], pt[0], pt[1])
@@ -572,17 +675,21 @@ class MapCanvas(QGraphicsView):
     def wheelEvent(self, event):
         """Fare orta tekerleği ile yakınlaştırma/uzaklaştırma.
         Klasik tekerlek (angleDelta) ve dokunmatik yüzey (pixelDelta) desteklenir;
-        zoom imlecin altındaki coğrafi nokta sabit kalacak şekilde yapılır."""
+        zoom imlecin altındaki coğrafi nokta sabit kalacak şekilde yapılır.
+        Ctrl + tekerlek: hızlı adım (3 seviye); sınırlar MIN_Z/MAX_Z."""
         angle = event.angleDelta().y()
         px = event.pixelDelta().y()
         if angle == 0 and px == 0:
             return
+        fast = event.modifiers() & Qt.KeyboardModifier.ControlModifier
         if angle:
             steps = max(1, abs(angle) // 120)
             direction = 1 if angle > 0 else -1
         else:
             steps = max(1, abs(px) // 40)
             direction = 1 if px > 0 else -1
+        if fast:
+            steps *= 3
         # imlecin altındaki coğrafi konum (zoom merkezi)
         pos = self.mapToScene(event.position().toPoint())
         lon, lat = pixel_to_lonlat(pos.x(), pos.y(), self.zoom)
@@ -649,6 +756,14 @@ class MapCanvas(QGraphicsView):
     def mouseDoubleClickEvent(self, event):
         if self.mode in (self.MODE_DRAW, self.MODE_RECT):
             self._finish_draw()
+            event.accept()
+            return
+        # Gez modunda çift tık: o noktaya 1 seviye yakınlaş (sınır MAX_Z)
+        if self.mode == self.MODE_PAN and event.button() == Qt.MouseButton.LeftButton:
+            pos = self.mapToScene(event.position().toPoint())
+            lon, lat = pixel_to_lonlat(pos.x(), pos.y(), self.zoom)
+            self.center_lonlat = (lon, lat)
+            self.set_zoom(self.zoom + 1)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)

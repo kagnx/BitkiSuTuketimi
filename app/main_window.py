@@ -24,7 +24,8 @@ from .coords import (CITIES, ILLER, format_area, tm_zone_for_lon, lonlat_to_tm,
                       nearest_city)
 from .dialogs import PlantEditDialog, CoordinateDialog, ClimateEditDialog
 from .compare import CompareDialog
-from .mapwidget import MapCanvas, TILE_SOURCES, DEFAULT_TILE_SOURCE, lonlat_to_pixel, pixel_to_lonlat
+from .mapwidget import (MapCanvas, TILE_SOURCES, DEFAULT_TILE_SOURCE,
+                       lonlat_to_pixel, pixel_to_lonlat, MIN_Z, MAX_Z)
 from .config import TELIF
 from .report import save_report_html, save_report_csv, REPORT_DIR
 from .theme import QSS, PRIMARY, PRIMARY_DARK, PRIMARY_LIGHT, BG_DARK
@@ -749,6 +750,12 @@ class MainWindow(QMainWindow):
         b_pdf.clicked.connect(self._make_pdf_report)
         b_csv = QPushButton("📊 CSV Dışa Aktar")
         b_csv.clicked.connect(self._make_csv_report)
+        b_docx = QPushButton("📘 DOCX Rapor")
+        b_docx.setToolTip("Reportlab ile profesyonel DOCX raporu üretir")
+        b_docx.clicked.connect(self._make_docx_report)
+        b_xlsx = QPushButton("📗 XLSX Rapor")
+        b_xlsx.setToolTip("Openpyxl ile Excel raporu üretir")
+        b_xlsx.clicked.connect(self._make_xlsx_report)
         b_cmp = QPushButton("⚖️ Bitki Karşılaştır")
         b_cmp.setToolTip("Aynı konum/iklim için farklı bitkilerin su ihtiyacını karşılaştırır")
         b_cmp.clicked.connect(self._open_compare)
@@ -756,6 +763,8 @@ class MainWindow(QMainWindow):
         act_row.addWidget(b_html)
         act_row.addWidget(b_pdf)
         act_row.addWidget(b_csv)
+        act_row.addWidget(b_docx)
+        act_row.addWidget(b_xlsx)
         act_row.addWidget(b_cmp)
         act_row.addStretch(1)
         rl.addLayout(act_row)
@@ -1158,6 +1167,36 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "CSV Kaydedildi", f"CSV kaydedildi:\n{path}")
         self.refresh_reports()
 
+    def _make_docx_report(self):
+        """Reportlab ile DOCX raporu üretir."""
+        if not self.last_result:
+            QMessageBox.information(self, "Hesap Yok", "Önce hesaplama yapın.")
+            return
+        from .config import load_config
+        from .report import build_report_docx
+        try:
+            path = build_report_docx(self.last_result, self.last_ekstra, load_config())
+        except Exception as e:
+            QMessageBox.warning(self, "DOCX Hatası", f"DOCX üretilemedi:\n{e}")
+            return
+        QMessageBox.information(self, "DOCX Oluşturuldu", f"DOCX kaydedildi:\n{path}")
+        self.refresh_reports()
+
+    def _make_xlsx_report(self):
+        """Openpyxl ile XLSX raporu üretir."""
+        if not self.last_result:
+            QMessageBox.information(self, "Hesap Yok", "Önce hesaplama yapın.")
+            return
+        from .config import load_config
+        from .report import build_report_xlsx
+        try:
+            path = build_report_xlsx(self.last_result, self.last_ekstra, load_config())
+        except Exception as e:
+            QMessageBox.warning(self, "XLSX Hatası", f"XLSX üretilemedi:\n{e}")
+            return
+        QMessageBox.information(self, "XLSX Oluşturuldu", f"XLSX kaydedildi:\n{path}")
+        self.refresh_reports()
+
     def _open_compare(self):
         """Aynı konum için bitki karşılaştırma diyaloğunu açar."""
         self._sync_climate_from_ui()
@@ -1447,9 +1486,24 @@ class MainWindow(QMainWindow):
         bar.addWidget(b_tr)
         bar.addWidget(QLabel("Katman:"))
         bar.addWidget(self.map_layer)
+        # zoom kaydırıcısı: MIN_Z..MAX_Z — kaydırma ve butonlar senkron
+        from PyQt6.QtWidgets import QSlider
+        from PyQt6.QtCore import Qt as _Qt
+        self.zoom_slider = QSlider(_Qt.Orientation.Horizontal)
+        self.zoom_slider.setMinimum(MIN_Z)
+        self.zoom_slider.setMaximum(MAX_Z)
+        self.zoom_slider.setSingleStep(1)
+        self.zoom_slider.setPageStep(2)
+        self.zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.zoom_slider.setTickInterval(3)
+        self.zoom_slider.setFixedWidth(170)
+        self.zoom_slider.setToolTip(
+            "Yakınlaşma seviyesi (tekerlek: imleç sabit, Ctrl+tekerlek: hızlı)")
+        self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
+        bar.addWidget(self.zoom_slider)
         self.zoom_lbl = QLabel("Zoom: 11")
         self.zoom_lbl.setObjectName("muted")
-        self.zoom_lbl.setMinimumWidth(60)
+        self.zoom_lbl.setMinimumWidth(84)
         bar.addWidget(self.zoom_lbl)
         bar.addStretch(1)
         b_exp_csv = QPushButton("💾 CSV")
@@ -1465,12 +1519,29 @@ class MainWindow(QMainWindow):
         self.map.parcel_drawn.connect(self._parcel_drawn)
         self.map.coordinate_picked.connect(self._coordinate_picked)
         self.map.parcel_selected.connect(self._map_parcel_selected)
-        self.map.zoom_changed.connect(lambda z: self.zoom_lbl.setText(f"Zoom: {z}"))
+        self.map.zoom_changed.connect(self._map_zoom_changed)
         self.map_layer.currentTextChanged.connect(self.map.set_tile_source)
+        # kaydırıcıyı mevcut seviyeyle başlat (set_zoom sinyali bunu yapar)
+        self.map.apply_transform()
         rr.addWidget(self.map, 1)
         body.addWidget(right, 1)
 
         lay.addLayout(body, 1)
+
+    def _map_zoom_changed(self, z):
+        """Harita zoom değişimini etikete ve kaydırıcıya yansıtır."""
+        self.zoom_lbl.setText(f"Zoom: {z}")
+        if hasattr(self, "zoom_slider"):
+            self.zoom_slider.blockSignals(True)
+            try:
+                self.zoom_slider.setValue(int(z))
+            finally:
+                self.zoom_slider.blockSignals(False)
+
+    def _zoom_slider_changed(self, z):
+        """Kaydırıcı hareketi: haritayı doğrudan o seviyeye alır."""
+        if hasattr(self, "map") and self.map is not None:
+            self.map.zoom_to(z)
 
     def _map_city_changed(self):
         city = self.map_city.currentText()
@@ -1719,6 +1790,24 @@ class MainWindow(QMainWindow):
             f"Parsel kaydedildi: Ada {data['ada']} / Parsel {data['parsel']}"
             + (f" ({yer})" if yer else "")
             + f" — {format_area(data['area'])}", 5000)
+
+    def keyPressEvent(self, event):
+        """Genel klavye kısayolları: harita sayfası açıksa +/− zoom."""
+        try:
+            if (hasattr(self, "stack") and self.stack.currentIndex() == 3
+                    and hasattr(self, "map") and self.map is not None):
+                key = event.key()
+                if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                    self.map.zoom_in()
+                    event.accept()
+                    return
+                if key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+                    self.map.zoom_out()
+                    event.accept()
+                    return
+        except Exception:
+            pass
+        super().keyPressEvent(event)
 
     def _find_parcel(self):
         ada = self.search_ada.text().strip()

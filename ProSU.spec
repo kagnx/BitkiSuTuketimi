@@ -23,6 +23,12 @@ a = Analysis(
         "PyQt6.QtNetwork",
         "PyQt6.QtSvg",
         "requests",
+        # yeni rapor export formatları (app/report.py)
+        "openpyxl",
+        "reportlab",
+        "reportlab.pdfgen",
+        "reportlab.platypus",
+        "reportlab.lib",
     ],
     hookspath=[],
     hooksconfig={},

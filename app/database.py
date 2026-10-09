@@ -86,13 +86,25 @@ class Database(QObject):
 
     # ------------------------- Bitkiler -------------------------
     def seed_plants(self):
-        """Veri setini ilk çalıştırmada yükler (bitki sayısı 0 ise)."""
+        """Veri setini yükler: boş tabloya tümünü, dolu tabloya yalnızca
+        adı olmayan yeni bitkileri ekler (mevcut kayıtlar ve kullanıcı
+        düzenlemeleri korunur)."""
         with self._lock:
             cur = self.conn.cursor()
             n = cur.execute("SELECT COUNT(*) FROM bitkiler").fetchone()[0]
             if n == 0:
                 for b in BITKILER:
                     self._insert_plant(cur, b)
+                self.conn.commit()
+                return
+            # senkron: adı veritabanında olmayan bitkileri ekle
+            existing = {r[0] for r in cur.execute("SELECT ad FROM bitkiler")}
+            added = 0
+            for b in BITKILER:
+                if b["ad"] not in existing:
+                    self._insert_plant(cur, b)
+                    added += 1
+            if added:
                 self.conn.commit()
 
     def _insert_plant(self, cur, b):
