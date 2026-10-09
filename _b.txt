@@ -1,0 +1,10 @@
+Kenar çubuğu (koyu yeşil): True
+Nav butonu (fıstık yeşili): True
+Sayfa 0 render OK
+Sayfa 1 render OK
+Sayfa 2 render OK
+Sayfa 3 render OK
+Sayfa 4 render OK
+Sayfa 5 render OK
+Önizleme kaydedildi: D:\bitki su tuketimi\raporlar\onizleme.png
+=== GÖRSEL KONTROL BAŞARILI ===

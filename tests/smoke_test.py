@@ -2,6 +2,16 @@
 """Smoke test: modüller, hesap, koordinat, UI kurulumu."""
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# Windows runner'da konsol kod sayfası cp1252'dir; Türkçe karakterli print'ler
+# UnicodeEncodeError ile çöküyordu. Ayrıntı: tests/_console.py
+from tests._console import force_utf8_console  # noqa: E402
+force_utf8_console()
+
+from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
