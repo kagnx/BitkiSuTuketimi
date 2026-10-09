@@ -7,6 +7,15 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # gerçek platform kullan (Windows); yoksa offscreen'e düş
 os.environ.pop("QT_QPA_PLATFORM", None)
+
+# Konsol çıkışı UTF-8'e sar (bkz. tests/smoke_test.py) — cp1252 konsolunda
+# Türkçe karakterli print'ler UnicodeEncodeError'a yol açıyor.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):
+        pass
 # Windows CI runner'da stdout cp1252'dir; Türkçe karakterli print() çağrıları
 # UnicodeEncodeError atıyordu. Çıktıyı UTF-8'e sabitle.
 try:

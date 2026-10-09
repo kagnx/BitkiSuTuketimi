@@ -4,6 +4,17 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# Windows konsolunda kod sayfası cp1252 olduğunda Türkçe karakterler (ı ğ ş İ ç ö)
+# UnicodeEncodeError'a yol açıyordu (GitHub Actions runner'ında smoke test bu
+# yüzden 1. saniyede düşüyordu). Stdout/stderr'i UTF-8'e sar: bu yalnızca bu
+# betiğin konsol çıktısını etkiler, uygulama içi davranışı değiştirmez.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):
+        pass
 # Windows CI runner'da stdout cp1252'dir; Türkçe karakterli print() çağrıları
 # UnicodeEncodeError atıyor ve betik ilk satırda ölüyordu. Çıktıyı UTF-8'e sabitle.
 try:
