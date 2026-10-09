@@ -237,6 +237,8 @@ assets/                     # uygulama ikonu (icon.ico / icon.png)
 .github/workflows/ci.yml    # test + tek exe derleme (CI)
 ProSU.spec                  # PyInstaller tanımı
 build_exe.bat / build_exe.sh
+LICENSE                     # MIT lisans
+THIRD_PARTY_NOTICES.md      # FAO-56 / Open-Meteo / OSM lisans koşulları
 requirements.txt            # çalışma zamanı bağımlılıkları
 requirements-dev.txt        # test + ek rapor formatları
 ```
@@ -250,7 +252,9 @@ requirements-dev.txt        # test + ek rapor formatları
 
 **Lisans:** [MIT](LICENSE) © 2026 Oğuz Kaan FIRAT
 
-Üçüncü taraf veri ve lisans koşulları:
+Kod MIT lisanslıdır. Kullanılan **üçüncü taraf veri ve hizmetlerin** (FAO-56,
+Open-Meteo, OSM, Esri/Google) lisans koşulları ayrıca belgelenmiştir:
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 
 | Kaynak | Kullanım | Lisans |
 |---|---|---|

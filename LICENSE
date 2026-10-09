@@ -20,17 +20,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
----
-
-Not on third-party data:
-
-- Crop coefficients (Kc), growth-stage lengths and root depths are taken from
-  FAO-56 "Crop Evapotranspiration - Guidelines for computing crop water
-  requirements" (FAO Irrigation and Drainage Paper 56, 1998). FAO publications
-  are in the public domain and may be reproduced freely.
-- Historical climate data is retrieved at runtime from the Open-Meteo API
-  (https://open-meteo.com), distributed under CC BY 4.0, attribution:
-  "Weather data by Open-Meteo.com".
-- Map tiles are served by OpenStreetMap contributors (ODbL) and, depending on
-  the active layer, by Esri and Google. Tiles are cached locally only and are
-  not redistributed by this project.
