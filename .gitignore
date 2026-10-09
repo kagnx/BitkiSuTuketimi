@@ -1,8 +1,9 @@
 __pycache__/
 *.pyc
-data/*.db
-data/*.db-journal
-data/*.sqlite
+# çalışma zamanı veritabanı (alt klasörler dahil — geçici kopyalar sızmasın)
+data/**/*.db
+data/**/*.db-journal
+data/**/*.sqlite
 .venv/
 venv/
 dist/
